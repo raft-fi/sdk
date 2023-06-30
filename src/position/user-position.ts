@@ -5,7 +5,15 @@ import { getTokenAllowance } from '../allowance';
 import { RaftConfig, SupportedCollateralTokens } from '../config';
 import { ERC20, PositionManager, ERC20Permit, ERC20Permit__factory } from '../typechain';
 import { ERC20PermitSignatureStruct } from '../typechain/PositionManager';
-import { CollateralToken, R_TOKEN, Token, TransactionWithFeesOptions, UnderlyingCollateralToken } from '../types';
+import {
+  ApprovalCallbacks,
+  ApprovalOptions,
+  CollateralToken,
+  R_TOKEN,
+  Token,
+  TransactionWithFeesOptions,
+  UnderlyingCollateralToken,
+} from '../types';
 import {
   createEmptyPermitSignature,
   createPermitSignature,
@@ -95,13 +103,10 @@ const DEBT_CHANGE_TO_CLOSE = Decimal.MAX_DECIMAL.mul(-1);
  * Options for managing a position.
  * @property collateralToken The collateral token to use for the operation.
  * @property frontendTag The frontend operator tag for the transaction.
- * @property approvalType The approval type for the collateral token or R token. Smart contract position owners have to
- * use `approve` since they don't support signing. Defaults to permit.
  */
-export interface ManagePositionOptions<C extends CollateralToken> extends TransactionWithFeesOptions {
+export interface ManagePositionOptions<C extends CollateralToken> extends TransactionWithFeesOptions, ApprovalOptions {
   collateralToken?: C;
   frontendTag?: string;
-  approvalType?: 'permit' | 'approve';
 }
 
 /**
@@ -121,14 +126,10 @@ export interface LeveragePositionOptions<C extends CollateralToken> extends Tran
  * Callbacks for managing a position.
  * @property onDelegateWhitelistingStart A callback that is called when the delegate whitelisting starts.
  * @property onDelegateWhitelistingEnd A callback that is called when the delegate whitelisting ends.
- * @property onApprovalStart A callback that is called when the collateral token or R approval starts.
- * @property onApprovalEnd A callback that is called when the approval ends.
  */
-export interface ManagePositionCallbacks {
+export interface ManagePositionCallbacks extends ApprovalCallbacks {
   onDelegateWhitelistingStart?: () => void;
   onDelegateWhitelistingEnd?: (error?: unknown) => void;
-  onApprovalStart?: () => void;
-  onApprovalEnd?: (error?: unknown) => void;
 }
 
 /**

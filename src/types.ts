@@ -27,3 +27,20 @@ export interface TransactionWithFeesOptions {
   maxFeePercentage?: Decimal;
   gasLimitMultiplier?: Decimal;
 }
+
+/**
+ * @property onApprovalStart A callback that is called when the collateral token or R approval starts.
+ * @property onApprovalEnd A callback that is called when the approval ends.
+ */
+export interface ApprovalCallbacks {
+  onApprovalStart?: () => void;
+  onApprovalEnd?: (error?: unknown) => void;
+}
+
+/**
+ * @property approvalType The approval type for the collateral token or R token. Smart contract position owners have to
+ * use `approve` since they don't support signing.
+ */
+export interface ApprovalOptions {
+  approvalType?: 'permit' | 'approve';
+}
