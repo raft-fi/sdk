@@ -16,7 +16,6 @@ import {
 } from './types';
 import {
   createEmptyPermitSignature,
-  createPermitSignature,
   getPositionManagerContract,
   getTokenContract,
   getWrappedCappedCollateralToken,
@@ -26,6 +25,7 @@ import {
   sendTransactionWithGasLimit,
 } from './utils';
 import { ERC20PermitSignatureStruct } from './typechain/PositionManager';
+import { getPermitOrApproveTokenStep } from './position/steps';
 
 interface RedeemCollateralStepType {
   name: 'permit' | 'approve' | 'redeem';
@@ -170,33 +170,16 @@ export class Protocol {
       const isEoaRedeemer = await isEoaAddress(await redeemer.getAddress(), redeemer);
       let rPermitSignature = createEmptyPermitSignature();
 
-      if (approvalType === 'permit' && isEoaRedeemer) {
-        const signature = yield {
-          type: {
-            name: 'permit',
-            token: R_TOKEN,
-          },
-          stepNumber: stepCounter++,
-          numberOfSteps,
-          action: () => createPermitSignature(redeemer, debtAmount, positionManagerAddress, rToken),
-        };
-
-        if (!signature) {
-          throw new Error('R permit signature is required');
-        }
-
-        rPermitSignature = signature;
-      } else {
-        yield {
-          type: {
-            name: 'approve',
-            token: R_TOKEN,
-          },
-          stepNumber: stepCounter++,
-          numberOfSteps,
-          action: () => rToken.approve(positionManagerAddress, debtAmount.toBigInt(Decimal.PRECISION)),
-        };
-      }
+      rPermitSignature = yield* getPermitOrApproveTokenStep(
+        redeemer,
+        R_TOKEN,
+        rToken,
+        debtAmount,
+        positionManagerAddress,
+        () => stepCounter++,
+        numberOfSteps,
+        approvalType === 'permit' && isEoaRedeemer,
+      );
 
       yield {
         type: {
