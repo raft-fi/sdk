@@ -1,6 +1,7 @@
 import { Decimal } from '@tempusfinance/decimal';
-import { Signer, ContractTransactionResponse, TransactionResponse, ZeroAddress } from 'ethers';
+import { Signer, ContractTransactionResponse, TransactionResponse, ZeroAddress, AbiCoder, ethers } from 'ethers';
 import { request, gql } from 'graphql-request';
+import axios from 'axios';
 import { getTokenAllowance } from '../allowance';
 import { RaftConfig, SupportedCollateralTokens } from '../config';
 import {
@@ -14,6 +15,9 @@ import {
   PositionManagerStETH,
   PositionManagerWrappedCollateralToken,
   PositionManagerWrappedCollateralToken__factory,
+  OneStepLeverageStETH,
+  OneStepLeverageStETH__factory,
+  WstETH__factory,
 } from '../typechain';
 import { ERC20PermitSignatureStruct } from '../typechain/PositionManager';
 import {
@@ -35,6 +39,8 @@ import {
   sendTransactionWithGasLimit,
 } from '../utils';
 import { PositionWithRunner } from './base';
+import { PriceFeed } from '../price';
+import OneStepLeverageStETHABI from '../abi/OneStepLeverageStETH.json';
 
 export interface ManagePositionStepType {
   name: 'whitelist' | 'approve' | 'permit' | 'manage';
@@ -240,6 +246,150 @@ export class UserPosition<T extends UnderlyingCollateralToken> extends PositionW
         collateralPermitSignature = result;
       }
     }
+  }
+
+  public async getLeverageSteps(
+    collateralChange: Decimal,
+    options: ManagePositionOptions<SupportedCollateralTokens[T]> & ManagePositionStepsPrefetch = {},
+  ) {
+    const { gasLimitMultiplier = Decimal.ONE, maxFeePercentage = Decimal.ONE, frontendTag } = options;
+
+    if (!this.user.provider) {
+      return;
+    }
+
+    const absoluteCollateralChangeValue = collateralChange.abs().value;
+    const isCollateralIncrease = collateralChange.gt(Decimal.ZERO);
+    const leverageMultiplier = new Decimal(2);
+    const slippage = new Decimal(0.01);
+
+    // let stepCounter = 1;
+    // const numberOfSteps = 1; // TODO - Check allowance and whitelist? and determine number of steps.
+
+    const swaps = [
+      {
+        poolId: '0x20a61b948e33879ce7f23e535cc7baa3bc66c5a9000000000000000000000555', // R / DAI Pool
+        assetInIndex: 1, // R
+        assetOutIndex: 0, // DAI
+        amount: 0,
+        userData: '0x00',
+      },
+    ];
+
+    const assets = [
+      '0x6B175474E89094C44Da98b954EedeAC495271d0F', // DAI
+      '0x183015a9bA6fF60230fdEaDc3F43b3D788b13e21', // R
+    ];
+
+    const deadline = Math.floor(Date.now() / 1000) + 30 * 60; // 60 minutes
+
+    const fromAmountOffset = 164;
+
+    const priceFeed = new PriceFeed(this.user.provider);
+    const price = await priceFeed.getPrice('wstETH');
+
+    // Amount of DAI to swap for wstETH (assuming DAI is worth $1)
+    const swapAmount = collateralChange.abs().mul(price).mul(leverageMultiplier.sub(Decimal.ONE));
+
+    const swapCalldata = await axios.get('https://api-raft.1inch.io/v5.0/1/swap', {
+      params: {
+        fromTokenAddress: '0x6B175474E89094C44Da98b954EedeAC495271d0F', // DAI
+        toTokenAddress: '0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0', // wstETH
+        amount: swapAmount.toBigInt(),
+        fromAddress: '0xE76aade122902e4bd30daFFeD504b718B9a9fAe3',
+        slippage: 1,
+        disableEstimate: true,
+      },
+    });
+
+    const abi = new ethers.Interface(OneStepLeverageStETHABI);
+
+    const ammData = abi
+      .getAbiCoder()
+      .encode(
+        [
+          'tuple(bytes32 poolId, uint256 assetInIndex, uint256 assetOutIndex, uint256 amount, bytes userData)[]',
+          'address[]',
+          'uint256',
+          'uint256',
+          'bytes',
+        ],
+        [swaps, assets, deadline, fromAmountOffset, swapCalldata.data.tx.data],
+      );
+
+    const contract = WstETH__factory.connect(
+      RaftConfig.networkConfig.tokens[this.underlyingCollateralToken].address,
+      this.user,
+    );
+    const wstEthPerStEth = await contract.tokensPerStEth();
+
+    const rate = new Decimal(wstEthPerStEth, Decimal.PRECISION);
+
+    console.log('collateralChange', collateralChange.toString());
+    console.log('rate', rate.toString());
+    console.log('price', price.toString());
+
+    // TODO - Convert stETH to wstETH if user selected stETH
+    const targetDebt = collateralChange.abs().mul(price).mul(leverageMultiplier.sub(Decimal.ONE));
+
+    // TODO - Convert stETH to wstETH if user selected stETH
+    const minReturn = collateralChange.abs().mul(leverageMultiplier.sub(Decimal.ONE)).mul(Decimal.ONE.sub(slippage));
+
+    /* yield {
+      type: {
+        name: 'leverage',
+      },
+      stepNumber: stepCounter++,
+      numberOfSteps,
+      action: () =>
+        sendTransactionWithGasLimit(
+          this.loadOneStepLeverageStETH().manageLeveragedPositionStETH,
+          [
+            absoluteDebtChangeValue, // DONE
+            isDebtIncrease, // DONE
+            absoluteCollateralChangeValue, // DONE
+            isCollateralIncrease, // DONE
+            ammData,
+            minReturnOrAmountToSell,
+            maxFeePercentage.toBigInt(), // DONE
+          ],
+          gasLimitMultiplier,
+          frontendTag,
+          this.user,
+        ),
+    }; */
+
+    console.log(`Target debt: ${targetDebt.toString()}`);
+    console.log(`Min return: ${minReturn.toString()}`);
+
+    const underlyingCollateralTokenContract = this.loadCollateralToken('wstETH');
+    if (!underlyingCollateralTokenContract) {
+      return null;
+    }
+
+    await underlyingCollateralTokenContract.approve(
+      RaftConfig.networkConfig.oneStepLeverageStEth,
+      absoluteCollateralChangeValue,
+    );
+
+    const action = () =>
+      sendTransactionWithGasLimit(
+        this.loadOneStepLeverageStETH().manageLeveragedPosition,
+        [
+          targetDebt.toBigInt(), // 11031.559989058627561905
+          true,
+          absoluteCollateralChangeValue, // 5
+          isCollateralIncrease, // DONE
+          ammData,
+          minReturn.toBigInt(),
+          maxFeePercentage.toBigInt(), // DONE
+        ],
+        gasLimitMultiplier,
+        frontendTag,
+        this.user,
+      );
+
+    action();
   }
 
   /**
@@ -786,6 +936,10 @@ export class UserPosition<T extends UnderlyingCollateralToken> extends PositionW
 
   private loadPositionManagerStETH(): PositionManagerStETH {
     return PositionManagerStETH__factory.connect(RaftConfig.networkConfig.positionManagerStEth, this.user);
+  }
+
+  private loadOneStepLeverageStETH(): OneStepLeverageStETH {
+    return OneStepLeverageStETH__factory.connect(RaftConfig.networkConfig.oneStepLeverageStEth, this.user);
   }
 
   private loadPositionManagerWrappedCollateralToken(

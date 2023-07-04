@@ -196,6 +196,8 @@ export class Protocol {
       UNDERLYING_COLLATERAL_TOKENS.map(async collateralToken => {
         const debtTokenAddress = RaftConfig.networkConfig.raftDebtTokens[collateralToken];
 
+        console.log(debtTokenAddress);
+
         // Return zero if address is not defined in config
         if (!debtTokenAddress) {
           this._debtSupply[collateralToken] = Decimal.ZERO;
